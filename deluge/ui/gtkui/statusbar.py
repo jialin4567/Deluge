@@ -38,6 +38,7 @@ import gtk
 import gobject
 import logging
 
+from twisted.internet import task
 from deluge.ui.client import client
 import deluge.component as component
 import deluge.common
@@ -109,6 +110,64 @@ class StatusBarItem:
     def get_text(self):
         return self._label.get_text()
 
+class ConnectionStateStatusBarItem(object):
+    def __init__(self):
+        self._update_lag_task = task.LoopingCall(self._update_lag)
+
+        self._ebox = gtk.EventBox()
+
+        self._connected_box = gtk.HBox(spacing=1)
+        self._connected_icon = gtk.Image()
+        self._connected_icon.set_from_stock(gtk.STOCK_CONNECT,
+                                            gtk.ICON_SIZE_MENU)
+        self._connected_box.pack_end(self._connected_icon, False, False, 2)
+        self._connected_label = gtk.Label()
+        self._connected_label.set_text(_("Connected"))
+        self._connected_box.pack_start(self._connected_label, False, False, 2)
+        self._ebox.add(self._connected_box)
+
+        self._disconnected_box = gtk.HBox()
+        self._disconnected_box.set_spacing(0)
+        self._disconnected_icon = gtk.Image()
+        self._disconnected_icon.set_from_stock(gtk.STOCK_DISCONNECT,
+                                               gtk.ICON_SIZE_MENU)
+        self._disconnected_box.pack_end(self._disconnected_icon, False, False, 0)
+        self._disconnected_label = gtk.Label()
+        self._disconnected_label.set_text(_("Not Connected"))
+        self._disconnected_box.pack_start(self._disconnected_label, False, False, 0)
+        self._ebox.add(self._disconnected_box)
+
+        self._ebox.connect("button-press-event", self._on_button_press_event)
+
+        self._ebox.show_all()
+        self.show_disconnected()
+
+    def get_eventbox(self):
+        return self._ebox
+
+    def show_connected(self):
+        if not self._update_lag_task.running:
+            self._update_lag_task.start(1, now=True)
+        self._disconnected_box.hide()
+        self._connected_box.show()
+
+    def show_disconnected(self):
+        if self._update_lag_task.running:
+            self._update_lag_task.stop()
+        self._connected_box.hide()
+        self._disconnected_box.show()
+
+    def _update_lag(self):
+        if client.connected and client.lag is not None:
+            self._connected_label.set_text(
+                _("Lag: %(lag)s") % dict(lag=client.lag))
+        elif client.connected:
+            self._connected_label.set_text(_("Connected"))
+
+    def _on_button_press_event(self, widget, event):
+        component.get("ConnectionManager").show()
+
+
 class StatusBar(component.Component):
     def __init__(self):
         component.Component.__init__(self, "StatusBar", interval=3)
@@ -137,27 +196,30 @@ class StatusBar(component.Component):
         }
         self.current_warnings = []
         # Add a HBox to the statusbar after removing the initial label widget
+        self.base_box = gtk.HBox()
+        self.base_box.set_spacing(0)
         self.hbox = gtk.HBox()
         self.hbox.set_spacing(10)
+        self.base_box.pack_start(self.hbox, True, True)
+        self.connection_state_widget = ConnectionStateStatusBarItem()
+        self.base_box.pack_end(
+            self.connection_state_widget.get_eventbox(), False, False, 0
+        )
         frame = self.statusbar.get_children()[0]
         frame.remove(frame.get_children()[0])
-        frame.add(self.hbox)
+        frame.add(self.base_box)
         self.statusbar.show_all()
-        # Create the not connected item
-        self.not_connected_item = StatusBarItem(
-            stock=gtk.STOCK_STOP, text=_("Not Connected"),
-            callback=self._on_notconnected_item_clicked)
-        # Show the not connected status bar
-        self.show_not_connected()
+        self.connection_state_widget.show_disconnected()
 
         # Hide if necessary
         self.visible(self.config["show_statusbar"])
 
-        client.register_event_handler("ConfigValueChangedEvent", self.on_configvaluechanged_event)
+        client.register_event_handler("ConfigValueChangedEvent",
+                                      self.on_configvaluechanged_event)
 
     def start(self):
         # Add in images and labels
-        self.remove_item(self.not_connected_item)
+        self.connection_state_widget.show_connected()
 
         self.connections_item = self.add_item(
             stock=gtk.STOCK_NETWORK,
@@ -218,7 +280,7 @@ class StatusBar(component.Component):
             self.remove_item(self.diskspace_item)
         except Exception, e:
             log.debug("Unable to remove StatusBar item: %s", e)
-        self.show_not_connected()
+        self.connection_state_widget.show_disconnected()
 
     def visible(self, visible):
         if visible:
@@ -227,10 +289,6 @@ class StatusBar(component.Component):
             self.statusbar.hide()
 
         self.config["show_statusbar"] = visible
-
-    def show_not_connected(self):
-        self.hbox.pack_start(
-            self.not_connected_item.get_eventbox(), expand=False, fill=False)
 
     def add_item(self, image=None, stock=None, text=None, callback=None, tooltip=None):
         """Adds an item to the status bar"""

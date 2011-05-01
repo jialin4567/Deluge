@@ -34,9 +34,10 @@
 #
 #
 
+import time
 import logging
 from twisted.internet.protocol import Protocol, ClientFactory
-from twisted.internet import reactor, ssl, defer
+from twisted.internet import defer, reactor, ssl, task
 try:
     import rencode
 except ImportError:
@@ -63,6 +64,25 @@ log = logging.getLogger(__name__)
 
 def format_kwargs(kwargs):
     return ", ".join([key + "=" + str(value) for key, value in kwargs.items()])
+
+class Lag(object):
+    __slots__ = ('value',)
+
+    def __init__(self, lag):
+        self.value = lag
+
+    def __repr__(self):
+        return '<Lag %s>' % self
+
+    def __str__(self):
+        return self.__unicode__().encode('utf-8')
+
+    def __unicode__(self):
+        if self.value >= 1:
+            return u'%.1f s' % self.value
+        elif self.value >= 0.001:
+            return u'%.2f ms' % (self.value*1000.0)
+        return u'%.2f \u00B5s' % (self.value*1000000.0)
 
 class DelugeRPCError(object):
     """
@@ -293,6 +313,11 @@ class DaemonSSLProxy(DaemonProxy):
         self.auth_levels_mapping = None
         self.auth_levels_mapping_reverse = None
 
+        # Lag related stuff
+        self.__lag_calc_start = None
+        self.__lag_calc_defer = None
+        self.__lag_calc_task = task.LoopingCall(self.__ping_daemon)
+
     def connect(self, host, port):
         """
         Connects to a daemon at host:port
@@ -322,6 +347,9 @@ class DaemonSSLProxy(DaemonProxy):
 
     def disconnect(self):
         log.debug("sslproxy.disconnect()")
+        if self.__lag_calc_task and self.__lag_calc_task.running:
+            self.__lag_calc_task.stop()
+            self.__lag_calc_start = self.__lag_calc_defer = self.lag = None
         self.disconnect_deferred = defer.Deferred()
         self.__connector.disconnect()
         return self.disconnect_deferred
@@ -469,6 +497,7 @@ class DaemonSSLProxy(DaemonProxy):
                 self.__on_auth_levels_mappings
             )
 
+        self.__lag_calc_task.start(1, now=False)
         self.login_deferred.callback(result)
 
     def __on_login_fail(self, result):
@@ -479,6 +508,28 @@ class DaemonSSLProxy(DaemonProxy):
         auth_levels_mapping, auth_levels_mapping_reverse = result
         self.auth_levels_mapping = auth_levels_mapping
         self.auth_levels_mapping_reverse = auth_levels_mapping_reverse
+
+    def __ping_daemon(self):
+        if not self.connected:
+            if self.__lag_calc_task and self.__lag_calc_task.running:
+                self.__lag_calc_task.stop()
+                self.__lag_calc_start = self.__lag_calc_defer = self.lag = None
+            return
+
+        if self.__lag_calc_defer is None or \
+                    (self.__lag_calc_defer and self.__lag_calc_defer.called):
+            # Already processed the previous server response.
+            self.__lag_calc_start = time.time()
+            self.__lag_calc_defer = self.call("daemon.ping")
+            self.__lag_calc_defer.addCallback(self.__on_daemon_ping_response)
+        elif self.__lag_calc_start is not None and not self.__lag_calc_defer.called:
+            # Server is taking too long to respond, keep adding up time to lag
+            self.lag = Lag(time.time()-self.__lag_calc_start)
+            log.debug("Lag: %s" % self.lag)
+
+    def __on_daemon_ping_response(self, result):
+        self.lag = Lag(time.time() - self.__lag_calc_start)
+        log.debug("Lag: %s" % self.lag)
 
     def set_disconnect_callback(self, cb):
         """
@@ -807,6 +858,12 @@ class Client(object):
         :rtype: int
         """
         return self._daemon_proxy.authentication_level
+
+    @property
+    def lag(self):
+        if self.is_classicmode():
+            return None
+        return self._daemon_proxy.lag
 
     @property
     def auth_levels_mapping(self):

@@ -210,7 +210,7 @@ class MenuBar(component.Component):
         self.menu_torrent.show()
 
         # Hide the change owner submenu until we get the accounts back from the
-        # demon.
+        # daemon.
         self.menuitem_change_owner.set_visible(False)
 
         # Get Known accounts to allow chaning ownership
@@ -220,7 +220,8 @@ class MenuBar(component.Component):
 
     def stop(self):
         log.debug("MenuBar stopping")
-        self.menuitem_change_owner.remove_submenu()
+        if self.menuitem_change_owner.get_submenu():
+            self.menuitem_change_owner.remove_submenu()
 
         for widget in self.change_sensitivity:
             self.window.main_glade.get_widget(widget).set_sensitive(False)
