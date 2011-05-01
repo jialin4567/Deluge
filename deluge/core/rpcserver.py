@@ -281,8 +281,11 @@ class DelugeRPCProtocol(Protocol):
                     self.transport.loseConnection()
             finally:
                 return
+        elif method == "daemon.ping" and self.valid_session():
+            # Special method to ping the daemon used in connection health stats
+            self.sendData((RPC_RESPONSE, request_id, (True)))
+            return
         elif method == "daemon.set_event_interest" and self.valid_session():
-            log.debug("RPC dispatch daemon.set_event_interest")
             # This special case is to allow clients to set which events they are
             # interested in receiving.
             # We are expecting a sequence from the client.

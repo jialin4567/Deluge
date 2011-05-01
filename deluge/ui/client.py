@@ -34,9 +34,10 @@
 #
 #
 
+import time
 import logging
 from twisted.internet.protocol import Protocol, ClientFactory
-from twisted.internet import reactor, ssl, defer
+from twisted.internet import defer, reactor, ssl, task
 try:
     import rencode
 except ImportError:
@@ -61,8 +62,28 @@ RPC_EVENT_AUTH = 4
 
 log = logging.getLogger(__name__)
 
+
 def format_kwargs(kwargs):
     return ", ".join([key + "=" + str(value) for key, value in kwargs.items()])
+
+class Lag(object):
+    __slots__ = ('value',)
+
+    def __init__(self, lag):
+        self.value = lag
+
+    def __repr__(self):
+        return '<Lag %s>' % self
+
+    def __str__(self):
+        return self.__unicode__().encode('utf-8')
+
+    def __unicode__(self):
+        if self.value >= 1:
+            return u'%.1f s' % self.value
+        elif self.value >= 0.001:
+            return u'%.2f ms' % (self.value*1000.0)
+        return u'%.2f \u00B5s' % (self.value*1000000.0)
 
 class DelugeRPCError(object):
     """
@@ -211,8 +232,10 @@ class DelugeRPCProtocol(Protocol):
             elif message_type == RPC_ERROR:
                 # Create the DelugeRPCError to pass to the errback
                 r = self.__rpc_requests[request_id]
-                e = DelugeRPCError(r.method, r.args, r.kwargs, request[2][0],
-                                   request[2][1], request[2][2])
+                e = DelugeRPCError(
+                    r.method, r.args, r.kwargs, request[2][0], request[2][1],
+                    request[2][2]
+                )
                 # Run the errbacks registered with this Deferred object
                 d.errback(e)
 
@@ -268,7 +291,47 @@ class DelugeRPCClientFactory(ClientFactory):
             self.daemon.disconnect_callback()
 
 class DaemonProxy(object):
-    pass
+    def __new__(cls, *args, **kwargs):
+        # This is needed because in Python 2.6 object.__new__ only accepts
+        # the cls argument.
+        print 12345, '\n\n\n', cls, cls.__name__
+        new_meth = super(DaemonProxy, cls).__new__
+        if new_meth is object.__new__:
+            inst = new_meth(cls)
+        else:
+            inst = new_meth(cls, *args, **kwargs)
+        if cls.__name__ != 'DaemonSSLProxy':
+            return inst
+        inst._lag_calc_start = None
+        inst._lag_calc_defer = None
+        inst.lag = None
+        inst._lag_calc_task = task.LoopingCall(inst._ping_daemon)
+        return inst
+
+    def _ping_daemon(self):
+        if not self.connected:
+            if self._lag_calc_task and self._lag_calc_task.running:
+                self._lag_calc_task.stop()
+                self._lag_calc_start = self._lag_calc_defer = self.lag = None
+            return
+
+
+
+        if not self._lag_calc_defer or \
+                        (self._lag_calc_defer and self._lag_calc_defer.called):
+            # Already processed the previous server response.
+            self._lag_calc_start = time.time()
+            self._lag_calc_defer = self.call("core.ping")
+            self._lag_calc_defer.addCallback(self._on_daemon_ping_response)
+        elif self._lag_calc_start is not None and not self._lag_calc_defer.called:
+            # Server is taking more than 1 sec to respond
+            self.lag = Lag(time.time()-self._lag_calc_start)
+            log.debug("Lag: %s" % self.lag)
+
+    def _on_daemon_ping_response(self, result):
+        self.lag = Lag(time.time() - self._lag_calc_start)
+        log.debug("Lag: %s" % self.lag)
+
 
 class DaemonSSLProxy(DaemonProxy):
     def __init__(self, event_handlers={}):
@@ -308,9 +371,9 @@ class DaemonSSLProxy(DaemonProxy):
         log.debug("sslproxy.connect()")
         self.host = host
         self.port = port
-        self.__connector = reactor.connectSSL(self.host, self.port,
-                                              self.__factory,
-                                              ssl.ClientContextFactory())
+        self.__connector = reactor.connectSSL(
+            self.host, self.port, self.__factory, ssl.ClientContextFactory()
+        )
         self.connect_deferred = defer.Deferred()
         self.daemon_info_deferred = defer.Deferred()
 
@@ -322,6 +385,7 @@ class DaemonSSLProxy(DaemonProxy):
 
     def disconnect(self):
         log.debug("sslproxy.disconnect()")
+        self._lag_calc_task.stop()
         self.disconnect_deferred = defer.Deferred()
         self.__connector.disconnect()
         return self.disconnect_deferred
@@ -468,7 +532,7 @@ class DaemonSSLProxy(DaemonProxy):
             self.call("core.get_auth_levels_mappings").addCallback(
                 self.__on_auth_levels_mappings
             )
-
+        self._lag_calc_task.start(1, now=False)
         self.login_deferred.callback(result)
 
     def __on_login_fail(self, result):
@@ -513,10 +577,12 @@ class DaemonClassicProxy(DaemonProxy):
         for event in event_handlers:
             for handler in event_handlers[event]:
                 self.__daemon.core.eventmanager.register_event_handler(event, handler)
+        self._lag_calc_task.start(1, now=False)
 
     def disconnect(self):
         self.connected = False
         self.__daemon = None
+        self._lag_calc_task.stop()
 
     def call(self, method, *args, **kwargs):
         #log.debug("call: %s %s %s", method, args, kwargs)
@@ -720,10 +786,11 @@ class Client(object):
         """
         Get some info about the connection or return None if not connected.
 
-        :returns: a tuple of (host, port, username) or None if not connected
+        :returns: a tuple of (host, port, username, lag) or None if not connected
         """
         if self.connected():
-            return (self._daemon_proxy.host, self._daemon_proxy.port, self._daemon_proxy.username)
+            return (self._daemon_proxy.host, self._daemon_proxy.port,
+                    self._daemon_proxy.username, self._daemon_proxy.lag)
 
         return None
 
@@ -771,6 +838,10 @@ class Client(object):
     def __on_disconnect(self):
         if self.disconnect_callback:
             self.disconnect_callback()
+
+    @property
+    def lag(self):
+        return self._daemon_proxy.lag
 
     def get_bytes_recv(self):
         """

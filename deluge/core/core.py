@@ -61,7 +61,7 @@ from deluge.core.pluginmanager import PluginManager
 from deluge.core.alertmanager import AlertManager
 from deluge.core.filtermanager import FilterManager
 from deluge.core.preferencesmanager import PreferencesManager
-from deluge.core.authmanager import AuthManager
+from deluge.core.authmanager import AuthManager, AUTH_LEVEL_READONLY
 from deluge.core.eventmanager import EventManager
 from deluge.core.rpcserver import export
 
