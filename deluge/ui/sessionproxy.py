@@ -79,7 +79,7 @@ class SessionProxy(component.Component):
 
     def start(self):
         def on_get_session_state(torrent_ids):
-            for torrent_ids_chunk in self.__get_list_in_chunks(torrent_ids, 2):
+            for torrent_ids_chunk in self.__get_list_in_chunks(torrent_ids):
                 torrent_ids_chunk = list(torrent_ids_chunk)
                 print 'querying status for chunk', torrent_ids_chunk
                 d = client.core.get_torrents_status(
@@ -292,7 +292,7 @@ class SessionProxy(component.Component):
                 self.cache_times.setdefault(key, {}).update({k:t})
         return status
 
-    def __get_list_in_chunks(self, list_to_chunk, chunk_size=20):
+    def __get_list_in_chunks(self, list_to_chunk, chunk_size=30):
         """
         Yield successive n-sized chunks from list_to_chunk.
         """
