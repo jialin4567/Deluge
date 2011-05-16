@@ -532,7 +532,6 @@ class ConnectionManager(component.Component):
             )
             return dialog.run()
 
-
         if try_counter:
             log.info("Retrying connection.. Retries left: %s", try_counter)
             return reactor.callLater(
