@@ -64,8 +64,10 @@ class InvalidTorrentError(DelugeError):
 class InvalidPathError(DelugeError):
     pass
 
+
 class _ClientSideRecreateError(DelugeError):
     pass
+
 
 class IncompatibleClient(_ClientSideRecreateError):
     def __init__(self, daemon_version):
@@ -76,7 +78,6 @@ class IncompatibleClient(_ClientSideRecreateError):
         ) % dict(daemon_version=self.daemon_version)
 
 class NotAuthorizedError(_ClientSideRecreateError):
-
     def __init__(self, current_level, required_level):
         self.message = _(
             "Auth level too low: %(current_level)s < %(required_level)s" %
@@ -84,6 +85,7 @@ class NotAuthorizedError(_ClientSideRecreateError):
         )
         self.current_level = current_level
         self.required_level = required_level
+
 
 
 class _UsernameBasedPasstroughError(_ClientSideRecreateError):
