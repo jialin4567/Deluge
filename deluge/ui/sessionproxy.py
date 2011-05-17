@@ -34,7 +34,7 @@
 #
 
 import logging
-from twisted.internet.defer import maybeDeferred, succeed
+from twisted.internet.defer import inlineCallbacks, maybeDeferred, succeed, returnValue
 
 import deluge.component as component
 from deluge.ui.client import client
@@ -78,16 +78,20 @@ class SessionProxy(component.Component):
         )
 
     def start(self):
+        @inlineCallbacks
         def on_get_session_state(torrent_ids):
+            for torrent_id in torrent_ids:
+                # Let's at least store the torrent ids with empty statuses
+                # so that upcomming queries don't throw errors.
+                self.__on_torrents_status({torrent_id: {}})
+
+            # Query for complete status in chunks
             for torrent_ids_chunk in self.__get_list_in_chunks(torrent_ids):
-                torrent_ids_chunk = list(torrent_ids_chunk)
-                print 'querying status for chunk', torrent_ids_chunk
-                d = client.core.get_torrents_status(
+                chunk_status = yield client.core.get_torrents_status(
                     {'id': torrent_ids_chunk}, [], True
-                ).addCallback(self.__on_torrents_status)
-            return d.addCallback(
-                self.create_status_dict_from_deferred, torrent_ids, []
-            )
+                )
+                self.__on_torrents_status(chunk_status)
+            returnValue(None)
         return client.core.get_session_state().addCallback(on_get_session_state)
 
     def stop(self):
@@ -163,7 +167,7 @@ class SessionProxy(component.Component):
             else:
                 d = client.core.get_torrent_status(
                     torrent_id, keys_to_get, True
-                ).addCallback(self.__on_torrents_status)
+                ).addCallback(self.__on_torrents_status, torrent_id)
                 return d.addCallback(
                     self.create_status_dict_from_deferred,
                     [torrent_id],
@@ -172,7 +176,7 @@ class SessionProxy(component.Component):
         else:
             d = client.core.get_torrent_status(
                 torrent_id, keys, True
-            ).addCallback(self.__on_torrents_status)
+            ).addCallback(self.__on_torrents_status, torrent_id)
             return d.addCallback(
                 self.create_status_dict_from_deferred,
                 None,
@@ -282,8 +286,10 @@ class SessionProxy(component.Component):
         del self.torrents[torrent_id]
         del self.cache_times[torrent_id]
 
-    def __on_torrents_status(self, status):
+    def __on_torrents_status(self, status, torrent_id=None):
         t = time.time()
+        if torrent_id:
+            status = {torrent_id: status}
         for key, value in status.items():
             self.torrents.setdefault(key, [t, value])
             self.torrents[key][0] = t
