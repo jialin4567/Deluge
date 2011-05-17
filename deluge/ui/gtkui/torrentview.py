@@ -540,13 +540,15 @@ class TorrentView(listview.ListView, component.Component):
 
     def get_visible_torrents(self, only_seen_in_treeview=False):
         if only_seen_in_treeview:
-            first_seen, last_seen = self.treeview.get_visible_range()
+            visible_range = self.treeview.get_visible_range()
+            if not visible_range:
+                return []
+            first_seen, last_seen = visible_range
             model = self.treeview.get_model()
             return [
                 model[n][self.get_column_index('torrent_id')[0]] for n in
                 range(first_seen[0], last_seen[0]+1)
             ]
-
         return self.status.keys()
 
     ### Callbacks ###
