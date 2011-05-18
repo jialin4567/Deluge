@@ -55,14 +55,14 @@ except ImportError:
 
 import deluge.component as component
 import deluge.configmanager
-from deluge.core.authmanager import AUTH_LEVEL_NONE, AUTH_LEVEL_DEFAULT, AUTH_LEVEL_ADMIN
-from deluge.error import (DelugeError, NotAuthorizedError, _PassthroughError,
-                          IncompatibleClient)
+from deluge.core.authmanager import (AUTH_LEVEL_NONE, AUTH_LEVEL_DEFAULT,
+                                     AUTH_LEVEL_ADMIN)
+from deluge.error import (DelugeError, NotAuthorizedError,
+                          _ClientSideRecreateError, IncompatibleClient)
 
 RPC_RESPONSE = 1
 RPC_ERROR = 2
 RPC_EVENT = 3
-RPC_EVENT_AUTH = 4
 
 log = logging.getLogger(__name__)
 
@@ -177,7 +177,8 @@ class DelugeRPCProtocol(Protocol):
 
             for call in request:
                 if len(call) != 4:
-                    log.debug("Received invalid rpc request: number of items in request is %s", len(call))
+                    log.debug("Received invalid rpc request: number of items "
+                              "in request is %s", len(call))
                     continue
                 #log.debug("RPCRequest: %s", format_request(call))
                 reactor.callLater(0, self.dispatch, *call)
@@ -198,7 +199,8 @@ class DelugeRPCProtocol(Protocol):
         This method is called when a new client connects.
         """
         peer = self.transport.getPeer()
-        log.info("Deluge Client connection made from: %s:%s", peer.host, peer.port)
+        log.info("Deluge Client connection made from: %s:%s",
+                 peer.host, peer.port)
         # Set the initial auth level of this session to AUTH_LEVEL_NONE
         self.factory.authorized_sessions[self.transport.sessionno] = AUTH_LEVEL_NONE
 
@@ -244,13 +246,13 @@ class DelugeRPCProtocol(Protocol):
             Sends an error response with the contents of the exception that was raised.
             """
             exceptionType, exceptionValue, exceptionTraceback = sys.exc_info()
-
             self.sendData((
                 RPC_ERROR,
                 request_id,
-                (exceptionType.__name__,
-                exceptionValue.args[0] if len(exceptionValue.args) == 1 else "",
-                "".join(traceback.format_tb(exceptionTraceback)))
+                exceptionType.__name__,
+                exceptionValue._args,
+                exceptionValue._kwargs,
+                "".join(traceback.format_tb(exceptionTraceback))
             ))
 
         if method == "daemon.info":
@@ -264,24 +266,14 @@ class DelugeRPCProtocol(Protocol):
             try:
                 client_version = kwargs.pop('client_version', None)
                 if client_version is None:
-                    raise IncompatibleClient(
-                        "Your deluge client is not compatible with the daemon. "
-                        "Please upgrade your client to %s" %
-                        deluge.common.get_version()
-                    )
+                    raise IncompatibleClient(deluge.common.get_version())
                 ret = component.get("AuthManager").authorize(*args, **kwargs)
                 if ret:
                     self.factory.authorized_sessions[self.transport.sessionno] = (ret, args[0])
                     self.factory.session_protocols[self.transport.sessionno] = self
             except Exception, e:
-                if isinstance(e, _PassthroughError):
-                    self.sendData(
-                        (RPC_EVENT_AUTH, request_id,
-                         e.__class__.__name__,
-                         e._args, e._kwargs, args[0])
-                    )
-                else:
-                    sendError()
+                sendError()
+                if not isinstance(e, _ClientSideRecreateError):
                     log.exception(e)
             else:
                 self.sendData((RPC_RESPONSE, request_id, (ret)))
