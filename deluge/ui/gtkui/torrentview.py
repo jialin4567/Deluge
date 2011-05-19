@@ -194,6 +194,9 @@ class TorrentView(listview.ListView, component.Component):
         # We keep a copy of the previous status to compare for changes
         self.prev_status = {}
 
+        # Have some cached filteres statuses
+        self.filters_cache = {}
+
         # Register the columns menu with the listview so it gets updated
         # accordingly.
         self.register_checklist_menu(
@@ -361,6 +364,10 @@ class TorrentView(listview.ListView, component.Component):
         # Request the statuses for all these torrent_ids, this is async so we
         # will deal with the return in a signal callback.
         if self.prev_filter != self.filter:
+            if str(self.filter) in self.filters_cache:
+                log.trace("Setting status from filters cache")
+                self.status = self.filters_cache[str(self.filter)]
+
             self.prev_filter = self.filter
             component.get("SessionProxy").get_torrents_status(
                 self.filter, status_keys
@@ -443,6 +450,7 @@ class TorrentView(listview.ListView, component.Component):
             self.prev_status = self.status.copy()   # A copy is required for
                                                     # diff's to actually be
                                                     # different
+            self.filters_cache[str(self.filter)] = self.status.copy()
 
             if update_required:
                 def update_with_diff():
@@ -451,6 +459,8 @@ class TorrentView(listview.ListView, component.Component):
             return
 
         self.status = status
+        self.filters_cache[str(self.filter)] = status.copy()
+
         if self.status == self.prev_status and self.prev_status:
             # We do not bother updating since the status hasn't changed
             self.prev_status = self.status
