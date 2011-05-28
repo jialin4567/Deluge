@@ -58,7 +58,7 @@ class SessionProxy(component.Component):
         component.Component.__init__(self, "SessionProxy", interval=5)
 
         # Set the cache time in seconds
-        # This is how long data will be valid before refetching from the core
+        # This is how long data will be valid before re-fetching from the core
         self.cache_time = 1.5
 
         # Hold the torrents' status.. {torrent_id: [time, {status_dict}], ...}
@@ -81,13 +81,21 @@ class SessionProxy(component.Component):
         def on_get_session_state(torrent_ids):
             for torrent_id in torrent_ids:
                 # Let's at least store the torrent ids with empty statuses
-                # so that upcomming queries don't throw errors.
+                # so that upcoming queries or status updates don't throw errors.
                 self.torrents.setdefault(torrent_id, [time.time(), {}])
                 self.cache_times.setdefault(torrent_id, {})
-
-            for chunk in self.__get_list_in_chunks(torrent_ids):
-                reactor.callLater(0, self.get_torrents_status, chunk, [])
-
+            # These initial keys are the ones used for the visible columns(by
+            # default) on the GTK UI torrent view. If either the console-ui
+            # or the web-ui needs additional keys, add them here;
+            # There's NO need to fetch every bit of status information from
+            # core if it's not going to be used. Additional status fields
+            # will be queried later, for example, when viewing the status tab
+            # of a torrent.
+            inital_keys = [
+                'queue', 'state', 'name', 'total_wanted', 'progress', 'state',
+                'download_payload_rate', 'upload_payload_rate', 'eta'
+            ]
+            self.get_torrents_status({'id': torrent_ids}, inital_keys)
         return client.core.get_session_state().addCallback(on_get_session_state)
 
     def stop(self):
@@ -101,10 +109,6 @@ class SessionProxy(component.Component):
             "TorrentAddedEvent", self.on_torrent_added
         )
         self.torrents = {}
-
-    def update(self):
-        # Get updated full status of all torrents periodicaly
-        self.get_torrents_status({'id': self.torrents.keys()}, [])
 
     def create_status_dict(self, torrent_ids, keys):
         """
@@ -198,6 +202,7 @@ class SessionProxy(component.Component):
         :rtype: dict
 
         """
+
         # Helper functions and callbacks ---------------------------------------
         def on_status(result, torrent_ids, keys):
             # Update the internal torrent status dict with the update values
@@ -233,7 +238,7 @@ class SessionProxy(component.Component):
 
         if not filter_dict:
             # This means we want all the torrents status
-            # We get a list of any torrent_ids with expired status dicts
+            # We get a list of any torrent_ids with expired status dict's
             to_fetch = find_torrents_to_fetch(self.torrents.keys())
             if to_fetch:
                 d = client.core.get_torrents_status({"id": to_fetch}, keys, True)
@@ -280,10 +285,3 @@ class SessionProxy(component.Component):
     def on_torrent_removed(self, torrent_id):
         del self.torrents[torrent_id]
         del self.cache_times[torrent_id]
-
-    def __get_list_in_chunks(self, list_to_chunk, chunk_size=30):
-        """
-        Yield successive n-sized chunks from list_to_chunk.
-        """
-        for i in xrange(0, len(list_to_chunk), chunk_size):
-            yield list_to_chunk[i:i+chunk_size]
