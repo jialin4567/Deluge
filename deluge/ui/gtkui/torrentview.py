@@ -86,7 +86,7 @@ def cell_data_statusicon(column, cell, model, row, data):
     """Display text with an icon"""
     try:
         icon = ICON_STATE[model.get_value(row, data)]
-        #Supress Warning: g_object_set_qdata: assertion `G_IS_OBJECT (object)' failed
+        #Suppress Warning: g_object_set_qdata: assertion `G_IS_OBJECT (object)' failed
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             if cell.get_property("pixbuf") != icon:
@@ -109,7 +109,7 @@ def cell_data_trackericon(column, cell, model, row, data):
         else:
             icon = create_blank_icon()
 
-        #Supress Warning: g_object_set_qdata: assertion `G_IS_OBJECT (object)' failed
+        #Suppress Warning: g_object_set_qdata: assertion `G_IS_OBJECT (object)' failed
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             if cell.get_property("pixbuf") != icon:
@@ -202,7 +202,7 @@ class TorrentView(listview.ListView, component.Component):
         # We keep a copy of the previous status to compare for changes
         self.prev_status = {}
 
-        # Have some cached filteres statuses
+        # Have some cached filters statuses
         self.filters_cache = {}
 
         # Register the columns menu with the listview so it gets updated
@@ -301,7 +301,13 @@ class TorrentView(listview.ListView, component.Component):
         """Start the torrentview"""
         # We need to get the core session state to know which torrents are in
         # the session so we can add them to our list.
-        component.get("SessionProxy").get_torrents_status({}, []).addCallback(self._on_session_state)
+        # Only get the status fields required for the visible columns
+        status_fields = []
+        for listview_column in self.columns.values():
+            if listview_column.column.get_visible():
+                status_fields.extend(listview_column.status_field)
+        component.get("SessionProxy").get_torrents_status(
+            {}, status_fields).addCallback(self._on_session_state)
 
     def _on_session_state(self, state):
         self.treeview.freeze_child_notify()
