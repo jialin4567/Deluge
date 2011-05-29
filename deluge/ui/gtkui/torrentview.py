@@ -202,9 +202,6 @@ class TorrentView(listview.ListView, component.Component):
         # We keep a copy of the previous status to compare for changes
         self.prev_status = {}
 
-        # Have some cached filters statuses
-        self.filters_cache = {}
-
         # Register the columns menu with the listview so it gets updated
         # accordingly.
         self.register_checklist_menu(
@@ -271,8 +268,8 @@ class TorrentView(listview.ListView, component.Component):
                              tooltip=_("Torrent is shared between other Deluge "
                                        "users or not."), default=False)
 
-        # Set filter and prev_filter to None for now
-        self.filter = self.prev_filter = None
+        # Set filter to None for now
+        self.filter = None
 
         ### Connect Signals ###
         # Connect to the 'button-press-event' to know when to bring up the
@@ -383,37 +380,15 @@ class TorrentView(listview.ListView, component.Component):
 
         # Request the statuses for all these torrent_ids, this is async so we
         # will deal with the return in a signal callback.
-        if self.prev_filter != self.filter:
-            if str(self.filter) in self.filters_cache:
-                log.trace("Setting status from filters cache")
-                self.status = self.filters_cache[str(self.filter)]
-
-            self.prev_filter = self.filter
-            component.get("SessionProxy").get_torrents_status(
-                self.filter, status_keys
-            ).addCallback(self._on_get_torrents_status, diff=False)
-            return
-
-        # Grab current filter
-        current_filter = self.filter
-        # Get the current ids from the filter if any
-        torrent_ids = list(current_filter.get('id', []))
-        # Add the torrent ids from the visible rows in the torrents treeview
-        torrent_ids.extend(
-            self.get_visible_torrents(only_seen_in_treeview=True)
-        )
-        current_filter['id'] = list(set(torrent_ids))
-        # Get the status updates for the above torrent ids
         component.get("SessionProxy").get_torrents_status(
-            current_filter, status_keys
-        ).addCallback(self._on_get_torrents_status, diff=True)
+            self.filter, status_keys).addCallback(self._on_get_torrents_status)
 
     def update(self):
         if self.got_state:
             # Send a status request
             gobject.idle_add(self.send_status_request)
 
-    def update_view(self, columns=None, from_diff=False):
+    def update_view(self, columns=None):
         """Update the view.  If columns is not None, it will attempt to only
         update those columns selected.
         """
@@ -424,13 +399,11 @@ class TorrentView(listview.ListView, component.Component):
         for row in self.liststore:
             torrent_id = row[self.columns["torrent_id"].column_indices[0]]
 
-            if torrent_id not in status:
+            if not torrent_id in status.keys():
                 row[filter_column] = False
             else:
                 row[filter_column] = True
-                if torrent_id in self.prev_status and \
-                    status[torrent_id] == self.prev_status[torrent_id] and \
-                                                                not from_diff:
+                if torrent_id in self.prev_status and status[torrent_id] == self.prev_status[torrent_id]:
                     # The status dict is the same, so do not update
                     continue
 
@@ -451,36 +424,13 @@ class TorrentView(listview.ListView, component.Component):
                                           row_value, e)
 
         component.get("MenuBar").update_menu()
-        if not from_diff:
-            self.prev_status = status
 
-    def _on_get_torrents_status(self, status, diff=False):
-        """
-        Callback function for get_torrents_status().  'status' should be a
-        dictionary of {torrent_id: {key, value}}.
-        """
-        if diff:
-            update_required = False
-            self.status.update(status)
-            for torrent_id in status.iterkeys():
-                if torrent_id not in self.prev_status:
-                    update_required = True
-                elif self.status[torrent_id] != self.prev_status[torrent_id]:
-                    update_required = True
-            self.prev_status = self.status.copy()   # A copy is required for
-                                                    # diff's to actually be
-                                                    # different
-            self.filters_cache[str(self.filter)] = self.status.copy()
+        self.prev_status = status
 
-            if update_required:
-                def update_with_diff():
-                    self.update_view(from_diff=True)
-                gobject.idle_add(update_with_diff)
-            return
-
+    def _on_get_torrents_status(self, status):
+        """Callback function for get_torrents_status().  'status' should be a
+        dictionary of {torrent_id: {key, value}}."""
         self.status = status
-        self.filters_cache[str(self.filter)] = status.copy()
-
         if self.status == self.prev_status and self.prev_status:
             # We do not bother updating since the status hasn't changed
             self.prev_status = self.status
@@ -568,17 +518,7 @@ class TorrentView(listview.ListView, component.Component):
         except:
             return {}
 
-    def get_visible_torrents(self, only_seen_in_treeview=False):
-        if only_seen_in_treeview:
-            visible_range = self.treeview.get_visible_range()
-            if not visible_range:
-                return []
-            first_seen, last_seen = visible_range
-            model = self.treeview.get_model()
-            return [
-                model[n][self.get_column_index('torrent_id')[0]] for n in
-                range(first_seen[0], last_seen[0]+1)
-            ]
+    def get_visible_torrents(self):
         return self.status.keys()
 
     ### Callbacks ###
