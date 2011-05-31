@@ -225,6 +225,30 @@ class Torrent(object):
     def get_options(self):
         return self.options
 
+    def get_name(self):
+        if self.handle.has_metadata():
+            name = self.torrent_info.file_at(0).path.split("/", 1)[0]
+            if not name:
+                name = self.torrent_info.name()
+            try:
+                return name.decode("utf8", "ignore")
+            except UnicodeDecodeError:
+                return name
+        elif self.magnet:
+            try:
+                keys = dict([k.split('=') for k in self.magnet.split('?')[-1].split('&')])
+                name = keys.get('dn')
+                if not name:
+                    return self.torrent_id
+                name = unquote(name).replace('+', ' ')
+                try:
+                    return name.decode("utf8", "ignore")
+                except UnicodeDecodeError:
+                    return name
+            except:
+                pass
+        return self.torrent_id
+
     def set_owner(self, account):
         self.owner = account
 
@@ -685,32 +709,6 @@ class Torrent(object):
                     return self.torrent_info.comment()
             return ""
 
-        def ti_name():
-            if self.handle.has_metadata():
-                name = self.torrent_info.file_at(0).path.split("/", 1)[0]
-                if not name:
-                    name = self.torrent_info.name()
-                try:
-                    return name.decode("utf8", "ignore")
-                except UnicodeDecodeError:
-                    return name
-
-            elif self.magnet:
-                try:
-                    keys = dict([k.split('=') for k in self.magnet.split('?')[-1].split('&')])
-                    name = keys.get('dn')
-                    if not name:
-                        return self.torrent_id
-                    name = unquote(name).replace('+', ' ')
-                    try:
-                        return name.decode("utf8", "ignore")
-                    except UnicodeDecodeError:
-                        return name
-                except:
-                    pass
-
-            return self.torrent_id
-
         def ti_priv():
             if self.handle.has_metadata():
                 return self.torrent_info.priv()
@@ -731,6 +729,10 @@ class Torrent(object):
             if self.handle.has_metadata():
                 return self.torrent_info.piece_length()
             return 0
+        def ti_pieces_info():
+            if self.handle.has_metadata():
+                return self.get_pieces_info()
+            return None
 
         fns = {
             "comment": ti_comment,
@@ -738,9 +740,10 @@ class Torrent(object):
             "file_progress": self.get_file_progress,
             "files": self.get_files,
             "is_seed": self.handle.is_seed,
-            "name": ti_name,
+            "name": self.get_name,
             "num_files": ti_num_files,
             "num_pieces": ti_num_pieces,
+            "pieces": ti_pieces_info,
             "peers": self.get_peers,
             "piece_length": ti_piece_length,
             "private": ti_priv,
@@ -995,3 +998,39 @@ class Torrent(object):
         log.trace("Torrent %s has all the pieces. Setting last seen complete.",
                   self.torrent_id)
         self._last_seen_complete = time.time()
+
+    def get_pieces_info(self):
+        pieces = {}
+        # First get the pieces availability.
+        availability = self.handle.piece_availability()
+        # Pieces from connected peers
+        for peer_info in self.handle.get_peer_info():
+            if peer_info.downloading_piece_index < 0:
+                # No piece index, then we're not downloading anything from
+                # this peer
+                continue
+            pieces[peer_info.downloading_piece_index] = 2
+
+        # Now, the rest of the pieces
+        for idx, piece in enumerate(self.handle.status().pieces):
+            if idx in pieces:
+                # Piece beeing downloaded, handled above
+                continue
+            elif piece:
+                # Completed Piece
+                pieces[idx] = 3
+                continue
+            elif availability[idx] > 0:
+                # Piece not downloaded nor beeing downloaded but available
+                pieces[idx] = 1
+                continue
+            # If we reached here, it means the piece is missing, ie, there's
+            # no known peer with this piece, or this piece has not been asked
+            # for so far.
+            pieces[idx] = 0
+
+        sorted_indexes = pieces.keys()
+        sorted_indexes.sort()
+        # Return only the piece states, no need for the piece index
+        # Keep the order
+        return [pieces[idx] for idx in sorted_indexes]
