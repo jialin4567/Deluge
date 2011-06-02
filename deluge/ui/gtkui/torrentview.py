@@ -532,7 +532,7 @@ class TorrentView(listview.ListView, component.Component):
                 filter, status_keys
             ).addCallback(self._on_get_torrents_status, diff=True)
 
-            def get_sorting_column_status(filter):
+            def get_sorting_column_status(torrent_ids, filter):
                 # While we're reducing bandwidth because we're only asking for
                 # torrents which are visible to the user on the torrent view,
                 # we still need to get some more info for all torrents in
@@ -547,16 +547,23 @@ class TorrentView(listview.ListView, component.Component):
 
                 # Get the sorting column
                 sorting_column = self.get_column_name(sorting_column_id[0])
-                # Get status info for all torrents in current filter but just for
-                # the sorting column status field(s)
-                filter.pop('id', None)
+                # Get status info the torrents not visible to the user in current
+                # filter, but just for the sorting column status field(s).
+                filter['id'] = torrent_ids
                 status_keys = self.columns[sorting_column].status_field
                 log.trace("Querying status updates on key(s) %s for all torrents "
                           "in current filter", status_keys)
                 component.get("SessionProxy").get_torrents_status(
                     filter, status_keys
                 ).addCallback(self._on_get_torrents_status, diff=True)
-            reactor.callLater(self._component_interval/2, get_sorting_column_status, filter)
+
+            all_torrent_ids = set(self.get_visible_torrents())
+            torrent_ids_which_werent_updated = all_torrent_ids.difference(set(filter['id']))
+            if torrent_ids_which_werent_updated:
+                reactor.callLater(
+                    self._component_interval/2, get_sorting_column_status,
+                    list(torrent_ids_which_werent_updated), filter
+                )
             return
         # We're filtering by name
         filter['id'] = self.get_visible_torrents(only_seen_in_treeview=False)
