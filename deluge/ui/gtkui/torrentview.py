@@ -531,6 +531,32 @@ class TorrentView(listview.ListView, component.Component):
             component.get("SessionProxy").get_torrents_status(
                 filter, status_keys
             ).addCallback(self._on_get_torrents_status, diff=True)
+
+            def get_sorting_column_status(filter):
+                # While we're reducing bandwidth because we're only asking for
+                # torrents which are visible to the user on the torrent view,
+                # we still need to get some more info for all torrents in
+                # current filter. Imagine the torrent view is sorting by download
+                # speed(descending). If a torrent which is not currently visible
+                # starts downloading at a faster speed, it might need to be shown first.
+
+                # Get the sorting column id
+                sorting_column_id = self.model_filter.get_sort_column_id()
+                if not sorting_column_id:
+                    return
+
+                # Get the sorting column
+                sorting_column = self.get_column_name(sorting_column_id[0])
+                # Get status info for all torrents in current filter but just for
+                # the sorting column status field(s)
+                filter.pop('id', None)
+                status_keys = self.columns[sorting_column].status_field
+                log.trace("Querying status updates on key(s) %s for all torrents "
+                          "in current filter", status_keys)
+                component.get("SessionProxy").get_torrents_status(
+                    filter, status_keys
+                ).addCallback(self._on_get_torrents_status, diff=True)
+            reactor.callLater(self._component_interval/2, get_sorting_column_status, filter)
             return
         # We're filtering by name
         filter['id'] = self.get_visible_torrents(only_seen_in_treeview=False)
