@@ -226,10 +226,11 @@ class SearchBox(object):
 
         self.prefiltered = None
 
-        self.search_torrents_entry.set_text("")
         if self.torrentview.filter and 'name' in self.torrentview.filter:
             self.torrentview.filter.pop('name', None)
-            self.search_pending = reactor.callLater(0.5, self.torrentview.update)
+
+        self.torrentview.filter['non_cached_status_request'] = True
+        self.search_torrents_entry.set_text("")
 
     def set_search_filter(self):
         if self.search_pending and self.search_pending.active():
@@ -243,12 +244,15 @@ class SearchBox(object):
 
         search_string = self.search_torrents_entry.get_text()
         if not search_string:
-            self.clear_search()
+            if not self.torrentview.filter.get('non_cached_status_request', False):
+                # search string is empty but not because the clear button was
+                # clicked. Go through the clean search logic...
+                self.clear_search()
         else:
             if self.match_search_button.get_active():
                 search_string += '::match'
             self.torrentview.filter['name'] = search_string
-        self.prefilter_torrentview()
+            self.prefilter_torrentview()
 
     def prefilter_torrentview(self):
         filter_column = self.torrentview.columns["filter"].column_indices[0]
@@ -333,9 +337,6 @@ class TorrentView(listview.ListView, component.Component):
         # We keep a copy of the previous status to compare for changes
         self.prev_status = {}
 
-        # Have some cached filters statuses
-        self.filters_cache = {}
-
         # Register the columns menu with the listview so it gets updated
         # accordingly.
         self.register_checklist_menu(
@@ -402,8 +403,8 @@ class TorrentView(listview.ListView, component.Component):
                              tooltip=_("Torrent is shared between other Deluge "
                                        "users or not."), default=False)
 
-        # Set filter and prev_filter to None for now
-        self.filter = self.prev_filter = None
+        # Set filter to None for now
+        self.filter = None
 
         ### Connect Signals ###
         # Connect to the 'button-press-event' to know when to bring up the
@@ -481,8 +482,9 @@ class TorrentView(listview.ListView, component.Component):
         """
         search_filter = self.filter and self.filter.get('name', None) or None
         self.filter = dict(filter_dict) #copied version of filter_dict.
-        if search_filter and 'name' not in filter_dict:
+        if search_filter is not None and 'name' not in filter_dict:
             self.filter['name'] = search_filter
+        self.filter['non_cached_status_request'] = True
         self.update()
 
     def set_columns_to_update(self, columns=None):
@@ -521,30 +523,21 @@ class TorrentView(listview.ListView, component.Component):
 
         # Request the statuses for all these torrent_ids, this is async so we
         # will deal with the return in a signal callback.
-        if self.prev_filter != self.filter:
-            if str(self.filter) in self.filters_cache:
-                log.trace("Setting status from filters cache")
-                self.status = self.filters_cache[str(self.filter)]
-
-            self.prev_filter = self.filter
+        filter = self.filter.copy()
+        search_filter_cleared = self.filter.pop('non_cached_status_request', False)
+        if filter.get('name', None) is None and not search_filter_cleared:
+            # we're not filtering by name
+            filter['id'] = self.get_visible_torrents(only_seen_in_treeview=True)
             component.get("SessionProxy").get_torrents_status(
-                self.filter, status_keys
-            ).addCallback(self._on_get_torrents_status, diff=False)
+                filter, status_keys
+            ).addCallback(self._on_get_torrents_status, diff=True)
             return
-
-        # Grab current filter
-        current_filter = self.filter
-        # Get the current ids from the filter if any
-        torrent_ids = list(current_filter.get('id', []))
-        # Add the torrent ids from the visible rows in the torrents treeview
-        torrent_ids.extend(
-            self.get_visible_torrents(only_seen_in_treeview=True)
-        )
-        current_filter['id'] = list(set(torrent_ids))
-        # Get the status updates for the above torrent ids
+        # We're filtering by name
+        filter['id'] = self.get_visible_torrents(only_seen_in_treeview=False)
         component.get("SessionProxy").get_torrents_status(
-            current_filter, status_keys
-        ).addCallback(self._on_get_torrents_status, diff=True)
+            self.filter, status_keys
+        ).addCallback(self._on_get_torrents_status, diff=False)
+
 
     def update(self):
         if self.got_state:
@@ -565,13 +558,11 @@ class TorrentView(listview.ListView, component.Component):
         for row in self.liststore:
             torrent_id = row[self.columns["torrent_id"].column_indices[0]]
 
-            if torrent_id not in status:
+            if not torrent_id in status:
                 row[filter_column] = False
             else:
                 row[filter_column] = True
-                if torrent_id in self.prev_status and \
-                    status[torrent_id] == self.prev_status[torrent_id] and \
-                                                                not from_diff:
+                if torrent_id in self.prev_status and status[torrent_id] == self.prev_status[torrent_id] and not from_diff:
                     # The status dict is the same, so do not update
                     continue
 
@@ -592,6 +583,7 @@ class TorrentView(listview.ListView, component.Component):
                                           row_value, e)
 
         component.get("MenuBar").update_menu()
+
         if not from_diff:
             self.prev_status = status
 
@@ -611,8 +603,6 @@ class TorrentView(listview.ListView, component.Component):
             self.prev_status = self.status.copy()   # A copy is required for
                                                     # diff's to actually be
                                                     # different
-            self.filters_cache[str(self.filter)] = self.status.copy()
-
             if update_required:
                 def update_with_diff():
                     self.update_view(from_diff=True)
@@ -622,7 +612,6 @@ class TorrentView(listview.ListView, component.Component):
         self.status = status
         if self.search_box.prefiltered is not None:
             self.search_box.prefiltered = None
-
         if self.status == self.prev_status and self.prev_status:
             # We do not bother updating since the status hasn't changed
             self.prev_status = self.status
