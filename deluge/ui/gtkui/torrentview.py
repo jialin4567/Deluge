@@ -551,8 +551,6 @@ class TorrentView(listview.ListView, component.Component):
                 # filter, but just for the sorting column status field(s).
                 filter['id'] = torrent_ids
                 status_keys = self.columns[sorting_column].status_field
-                log.trace("Querying status updates on key(s) %s for all torrents "
-                          "in current filter", status_keys)
                 component.get("SessionProxy").get_torrents_status(
                     filter, status_keys
                 ).addCallback(self._on_get_torrents_status, diff=True)
