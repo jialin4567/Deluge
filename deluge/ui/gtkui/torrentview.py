@@ -542,7 +542,7 @@ class TorrentView(listview.ListView, component.Component):
 
                 # Get the sorting column id
                 sorting_column_id = self.model_filter.get_sort_column_id()
-                if not sorting_column_id:
+                if sorting_column_id != (None, None):
                     return
 
                 # Get the sorting column
