@@ -229,6 +229,8 @@ class SearchBox(object):
         if self.torrentview.filter and 'name' in self.torrentview.filter:
             self.torrentview.filter.pop('name', None)
 
+        if self.torrentview.filter is None:
+            self.torrentview.filter = {}
         self.torrentview.filter['non_cached_status_request'] = True
         self.search_torrents_entry.set_text("")
 
@@ -540,9 +542,14 @@ class TorrentView(listview.ListView, component.Component):
                 # speed(descending). If a torrent which is not currently visible
                 # starts downloading at a faster speed, it might need to be shown first.
 
+                filter['id'] = torrent_ids
+
                 # Get the sorting column id
                 sorting_column_id = self.model_filter.get_sort_column_id()
                 if sorting_column_id != (None, None):
+                    component.get("SessionProxy").get_torrents_status(
+                        filter, ["state"]
+                    ).addCallback(self._on_get_torrents_status, diff=True)
                     return
 
                 # Get the sorting column
@@ -552,7 +559,7 @@ class TorrentView(listview.ListView, component.Component):
                 filter['id'] = torrent_ids
                 status_keys = self.columns[sorting_column].status_field
                 component.get("SessionProxy").get_torrents_status(
-                    filter, status_keys
+                    filter, status_keys + ["state"]
                 ).addCallback(self._on_get_torrents_status, diff=True)
 
             all_torrent_ids = set(self.get_visible_torrents())
