@@ -441,6 +441,8 @@ class TorrentView(listview.ListView, component.Component):
         status_fields = []
         for listview_column in self.columns.values():
             if listview_column.column.get_visible():
+                if not listview_column.status_field:
+                    continue
                 status_fields.extend(listview_column.status_field)
         component.get("SessionProxy").get_torrents_status(
             {}, status_fields).addCallback(self._on_session_state)
@@ -526,8 +528,8 @@ class TorrentView(listview.ListView, component.Component):
         # Request the statuses for all these torrent_ids, this is async so we
         # will deal with the return in a signal callback.
         filter = self.filter.copy()
-        search_filter_cleared = self.filter.pop('non_cached_status_request', False)
-        if filter.get('name', None) is None and not search_filter_cleared:
+        non_cached_status_request = self.filter.pop('non_cached_status_request', False)
+        if filter.get('name', None) is None and not non_cached_status_request:
             # we're not filtering by name
             filter['id'] = self.get_visible_torrents(only_seen_in_treeview=True)
             component.get("SessionProxy").get_torrents_status(
@@ -546,7 +548,7 @@ class TorrentView(listview.ListView, component.Component):
 
                 # Get the sorting column id
                 sorting_column_id = self.model_filter.get_sort_column_id()
-                if sorting_column_id != (None, None):
+                if sorting_column_id == (None, None):
                     component.get("SessionProxy").get_torrents_status(
                         filter, ["state"]
                     ).addCallback(self._on_get_torrents_status, diff=True)
