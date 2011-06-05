@@ -39,12 +39,9 @@
 import pygtk
 pygtk.require('2.0')
 import gtk
-import gtk.glade
-import gettext
 import gobject
 import logging
 import warnings
-from urlparse import urlparse
 
 from twisted.internet import reactor
 
@@ -52,7 +49,6 @@ import deluge.common
 import deluge.component as component
 from deluge.ui.client import client
 import listview
-from deluge.ui.tracker_icons import TrackerIcons
 from removetorrentdialog import RemoveTorrentDialog
 
 log = logging.getLogger(__name__)
@@ -417,8 +413,7 @@ class TorrentView(listview.ListView, component.Component):
         self.treeview.connect("key-release-event", self.on_key_press_event)
         # Connect to the 'changed' event of TreeViewSelection to get selection
         # changes.
-        self.treeview.get_selection().connect("changed",
-                                              self.on_selection_changed)
+        self.treeview.get_selection().connect("changed", self.on_selection_changed)
 
         self.treeview.connect("drag-drop", self.on_drag_drop)
         self.treeview.connect("key-press-event", self.on_key_press_event)
@@ -549,6 +544,7 @@ class TorrentView(listview.ListView, component.Component):
                 # Get the sorting column id
                 sorting_column_id = self.model_filter.get_sort_column_id()
                 if sorting_column_id == (None, None):
+                    # At least get the state for the non visible torrents
                     component.get("SessionProxy").get_torrents_status(
                         filter, ["state"]
                     ).addCallback(self._on_get_torrents_status, diff=True)
@@ -598,7 +594,7 @@ class TorrentView(listview.ListView, component.Component):
         for row in self.liststore:
             torrent_id = row[self.columns["torrent_id"].column_indices[0]]
 
-            if not torrent_id in status:
+            if torrent_id not in status:
                 row[filter_column] = False
             else:
                 row[filter_column] = True
@@ -622,10 +618,36 @@ class TorrentView(listview.ListView, component.Component):
                                           " %s", column_index[0], status_field,
                                           row_value, e)
 
+                        if from_diff:
+                            if not self.filter:
+                                # We're not filtering anything
+                                row[filter_column] = True
+                                continue
+
+                            torrent_status = status[torrent_id]
+                            for filter_field, filter_values in self.filter.iteritems():
+                                if filter_field in ('non_cached_status_request', 'name'):
+                                    continue
+                                elif filter_field == 'state' and "Active" in filter_values:
+                                    # This is a special case
+                                    if torrent_status.get("download_payload_rate", None):
+                                        row[filter_column] = True
+                                    elif torrent_status.get("upload_payload_rate", None):
+                                        row[filter_column] = True
+                                    else:
+                                        row[filter_column] = False
+                                    continue
+
+                                filtered_out = True
+                                for filter_value in filter_values:
+                                    if status[torrent_id][filter_field] == filter_value:
+                                        filtered_out = False
+                                        break
+                                row[filter_column] = not filtered_out
+
         component.get("MenuBar").update_menu()
 
-        if not from_diff:
-            self.prev_status = status
+        self.prev_status = status
 
     def _on_get_torrents_status(self, status, diff=False):
         """
@@ -633,20 +655,11 @@ class TorrentView(listview.ListView, component.Component):
         dictionary of {torrent_id: {key, value}}.
         """
         if diff:
-            update_required = False
             self.status.update(status)
-            for torrent_id in status.iterkeys():
-                if torrent_id not in self.prev_status:
-                    update_required = True
-                elif self.status[torrent_id] != self.prev_status[torrent_id]:
-                    update_required = True
-            self.prev_status = self.status.copy()   # A copy is required for
-                                                    # diff's to actually be
-                                                    # different
-            if update_required:
-                def update_with_diff():
-                    self.update_view(from_diff=True)
-                gobject.idle_add(update_with_diff)
+            def update_with_diff():
+                self.update_view(from_diff=True)
+                return False    # Remove it from gobject's idle_add loop
+            gobject.idle_add(update_with_diff)
             return
 
         self.status = status
