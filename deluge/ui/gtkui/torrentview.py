@@ -459,6 +459,7 @@ class TorrentView(listview.ListView, component.Component):
     def stop(self):
         """Stops the torrentview"""
         # We need to clear the liststore
+        self.treeview.unselect_all()
         self.liststore.clear()
         self.prev_status = {}
         self.filter = None
@@ -476,9 +477,12 @@ class TorrentView(listview.ListView, component.Component):
         listview.ListView.save_state(self, "torrentview.state")
 
     def set_filter(self, filter_dict):
-        """Sets filters for the torrentview..
+        """
+        Sets filters for the torrentview..
+
         see: core.get_torrents_status
         """
+        self.treeview.unselect_all()
         search_filter = self.filter and self.filter.get('name', None) or None
         self.filter = dict(filter_dict) #copied version of filter_dict.
         if search_filter is not None and 'name' not in filter_dict:
